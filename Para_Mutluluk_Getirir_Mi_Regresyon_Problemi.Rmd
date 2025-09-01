@@ -1,0 +1,336 @@
+# Does Money Buy Happiness?
+
+Yapmış olduğum bu projede 2021 dünya mutluluk raporundan elde edilen ladder score değerleri ile ülkelerin 2021 yılında elde edilmiş “GDP”, “Social Support”,“Freedom”,“Generosity”,“Corruption” düzeylerinin arasındaki ilişkiyi değerlendirme ve test etme amacıyla bir çoklu lineer regresyon modeli kuracağım. Öncelikle verimi R programlama diline aktarıyorum.
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(broom)
+library(ggpubr)
+library(caret)
+library(Metrics)
+library(readxl)
+library(PerformanceAnalytics)
+library(ISLR)
+library(mice)
+library(outliers)
+library(lmtest)
+```
+
+# Data İmport Etme ve Datayı İnceleme
+
+Öncelikle verimi R programlama diline aktarıyorum. Verimde bazı değişkenler “character” özelliğinde gözüktükleri için import dataset kısmında dataseti aktarırken değişkenlerimi numeric hale getiriyorum. İmport dataset’in vermiş olduğu komut dizini aşağıdaki gibidir:
+
+```{r}
+happiness <- read_excel("C:/Users/bjk_y/Downloads/world-happiness-report-2021.xlsx", 
+                        +     col_types = c("text", "text", "numeric", 
+                                            +         "text", "numeric", "numeric", "numeric", 
+                                            +         "numeric", "numeric", "numeric", 
+                                            +         "numeric", "numeric", "numeric", 
+                                            +         "text", "text", "text", "text", "text", 
+                                            +         "text", "text"))
+```
+
+Şimdi tanımladığımız happiness adlı veri setimizi görüntüleyelim.
+
+```{r}
+View(happiness)
+colnames(happiness)
+```
+
+“View()” komutu ile bütün veri setimizi görüntüleyebilirken, “colnames()” komutu ile birlikte yukarıda da görüldüğü gibi veri setimizdeki değişkenlerin isimlerini görebiliriz.
+
+Şimdi ise verimizde kayıp veri olup olmadığı ile ilgili bir sorgu yapalım. Bu sorguyu “is.na()” komutu sayesinde uygulayabiliriz. Ben bu komutu bir değere atayarak “sum()” komutu ile birlikte toplam kaç adet kayıp verim olduğunu öğrenebilirim. O halde:
+
+```{r}
+a <- is.na(happiness)
+sum(a)
+```
+
+Verilen sonuca göre verimde 49 adet missing data bulunmaktadır.
+
+Şimdi veri setimde çalışmak istediğim değişkenleri ayrı bir değere atayalım ve o değer üzerinden incelemelerimizi yapalım.
+
+```{r}
+model_data <- happiness[c("Ladder score","Logged GDP per capita","Social support","Freedom to make life choices","Generosity","Perceptions of corruption")]
+```
+
+Çalışmak istediğim değişkenlerimi ayırdığıma göre bu değerlerin arasındaki ilişkiyi görmek amacıyla bir korelasyon testi uygulayalım.
+
+```{r}
+cor(model_data)
+```
+
+Verimizdeki değişken isimleri oldukça uzun ve uygun karaktere sahip olmayan içerikler barındırıyor. Öncelikle değişken isimlerini bir yenileyelim.
+
+```{r}
+rendata <- rename(model_data, Ladder = "Ladder score", GDP = "Logged GDP per capita", Social.Support = "Social support", Freedom = "Freedom to make life choices",Corruption = "Perceptions of corruption")
+
+```
+
+Görüldüğü üzere “NA” görülmektedir. Bunun sebebi veri setimizdeki kayıp verileri temizlememiş olmamızdır. O halde kayıp verilerimizi temizleyelim ve yeniden korelasyon testi uygulayalım. Kayıp verileri temizlemek için “na.omit()” komutu kullanılır.
+
+```{r}
+clean.data <- na.omit(rendata)
+cor(clean.data)
+```
+
+Bu tabloya göre inceleme yapacak olursak:
+
+1-) Ladder score ve GDP arasında güçlü bir pozitif korelasyon vardır (0.779). Yani, genellikle bir ülkede Ladder Score ile GDP arasında pozitif bir ilişki vardır.
+
+2-)Social Support ve Ladder score arasında da güçlü bir pozitif ilişki vardır (0.743). Social support arttıkça, genellikle Ladder Score da artar.
+
+3-)Freedom ile diğer değişkenler arasında da pozitif ilişkiler vardır ancak daha düşüktür. Freedom ve Ladder Score arasında orta düzeyde bir korelasyon bulunur (0.598).
+
+4-)Corruption ile diğer değişkenler arasında negatif korelasyonlar görülmektedir. Bu da yolsuzluk düzeyi arttıkça Ladder score, GDP, Social support ve Freedom düzeylerinin genellikle azaldığını gösterir.
+
+5-) Generosity ile diğer değişkenler arasında belirgin bir ilişki gözlenmemektedir. Diğer değişkenlerle korelasyonu oldukça düşüktür.
+
+6-)GDP ve Social Support değişkenleri arasında 0.76’lık bir korelasyon vardır. Bağımsız değişkenler arasında güçlü ilişkiler bulundurması “multicolinerty” sorununu içerebilir. VIF ile incelenmesi gerekir.
+
+Değişkenler arasındaki ilişkiyi bir de görsel olarak görelim.
+
+```{r}
+pairs(clean.data, pch =20)
+```
+
+Plotta incelendiğinde değişkenler arasındaki ilişki gözükmektedir.
+
+# Kayıp Gözlemler
+
+Veri setimizin içerisindeki kayıp gözlemleri işlem dışı bırakmanın bir diğer yolu doldurma işlemidir. Doldurma işlemini “mice” kütüphanesi sayesinde yapabileceğiz. Öncelikle hangi değişkenlerde kaç adet “NA” değerimiz olduğunu görelim. Bunu “md.pattern()” komutu ile uygulayacağız.
+```{r}
+md.pattern(model_data)
+```
+
+Sonucu incelediğimizde 119 gözlemde “NA” değeri bulunmazken,
+
+11 gözlem için sadece “GDP” değişkeninde “NA” varken, 6 gözlem içinde sadece “Freedom” değişkeninde “NA” değeri olduğu görülmektedir. Toplamda 36 adet “NA” değeri görülmektedir. Gözlemlerimizi incelediğimize göre doldurma işlemine geçebiliriz. Doldurma işlemini “mice()” komutu ile uygulayacağız.
+
+```{r}
+imputed<-mice(rendata,m=7))
+```
+Burada “rendata” impute etmek istediğim veri setim olup, “m=7” kaç farklı impute edilmiş veri seti oluşturulacağını belirtir. Yani 7 farklı veri seti oluşturulacaktır.
+
+
+Şimdi doldurma işlemini ortalamalarına göre uygulayalım.
+```{r}
+rendata.imp <- complete(imputed,method = "mean")
+md.pattern(rendata.imp)
+```
+Görüldüğü üzere ortalamalarına göre kayıp verilerimizi doldurduk. Şimdi çoklu regresyon modelimizi oluşturmaya başlayabiliriz.
+
+
+# Model Oluşturma
+Öncelikle bir set.seed() değeri tanımlayalım. Sonrasında train(eğitim) ve test olmak üzere iki adet set verisi tanımlayalım. Ancak öncesinde benim veri setimden rastgele örnekler seçtirmem gerekmektedir. Bunu da “sample()” komutu sayesinde bir değere atayarak gerçekleştirebilirim. Şimdi adım adım uygulayalım.
+```{r}
+set.seed(75)
+sampleindex <- sample(1:nrow(rendata.imp), size = 0.8*nrow(rendata.imp))
+trainset <- rendata.imp[sampleindex,]
+testset <- rendata.imp[-sampleindex,]
+```
+train ve test verilerimi oluşturduğuma göre “data = trainset” olmak üzere modelimi oluşturabilirim. Modelimde bağımlı değişkenim “Ladder” iken bağımsız değişkenlerim “GDP”, “Social.Support”, “Freedom”, “Generosity”, “Corruption”’dur.
+```{r}
+model <- lm(Ladder~ GDP + Social.Support + Freedom + Generosity + Corruption, data = trainset)
+model
+```
+Değerlerini elde etmekteyim. Bu çıktı bize “coefficients(regresyon katsayıları)” değerlerini göstermektedir. Bu katsayılar şu şekilde değerlendirilir.
+
+1-) Intercept(ß0): Bu, regresyon denkleminde yer alan sabit terimidir. Modelin bağımsız değişkenlerin etkisi sıfır olduğunda, bağımlı değişkenin tahmin edilen başlangıç değerini temsil eder.
+
+2-)GDP: Bu değişkenin katsayısı 0.4271’dir. Yani, diğer değişkenler sabit olduğunda GDP değişkeni birim arttığında bağımlı değişkenin 0.4271 birim artmasını bekleriz.
+
+3-)Social Support: Bu değişkenin katsayısı 2241.4404’tür. Yani, diğer değişkenler sabit tutulduğunda, Social Support değişkeninin birim artışı bağımlı değişkeni 2241.4404 birim artırabilir.
+
+4-)Freedom: Bu değişkenin katsayısı 1916.9562’dir. Diğer değişkenler sabit olduğunda, Freedom değişkenindeki birim artış bağımlı değişkeni 1916.9562 birim artırabilir.
+
+5-)Generosity: Bu değişkenin katsayısı 453.5931’dir. Diğer değişkenler sabitken, Generosity değişkenindeki birim artış bağımlı değişkeni 453.5931 birim artırabilir.
+
+6-)Corruption: Bu değişkenin katsayısı -906.1804’tür. Diğer değişkenler sabit olduğunda, Corruption değişkenindeki birim artış bağımlı değişkeni -906.1804 birim azaltabilir.
+
+Modelin özet tablosunu gözlemleyecek olursak:
+```{r}
+summary(model)
+```
+Komutu ile gözlemleyebiliriz. Konsol çıktısını inceleyecek olursak:
+
+1-)Residuals hata terimlerini göstermektedir. En küçük hata terimi “-2029.81”,Medyan değeri “86.77” ve En büyük hata terimi ise “1032.45” olarak bulunmuştur.
+
+2-)“Estimate” sütunu, her bir bağımsız değişkeninin bağımlı değişken üzerindeki etkisini tahmin eder. “GDP” üzerinden örnek verecek olursak her bir birimlik artışın birimli değişken üzerinde “0.4271” birimlik bir artışa neden olacağı öngörülmektedir.
+
+3-)“Std. Error” sütunu,her bir katsayının tahmini değerlerinin ne kadar değişebileceğini gösterir. Düşük standart hatalar, regresyon katsayılarının daha kesin tahmin edildiğini ve modelin daha güvenilir olduğunu gösterebilir.
+
+4-)“GDP”, “Social Support” ve “Freedom” değişkenleri için yüksek t değerleri bulunmaktadır. Bu durum, bu değişkenlerin modelde anlamlı olduklarını gösterebilir. Diğer yandan, “Generosity” ve “Corruption” değişkenleri için t değerleri daha düşüktür, bu da bu değişkenlerin modeldeki anlamlılıklarının daha düşük olduğunu veya anlamsız olduklarını işaret edebilir.
+
+5-)“Pr(>|t|)” sütunu, her bir regresyon katsayısının model anlamlılığını inceler. “p < 0,05” ise #ilgili değişkenin katsayısı model bazında anlamlı kabul edilir. Elde ettiğimiz değerlere göre “Generosity” #değişkeni büyük olduğundan anlamsızdır ve modelden çıkarılmalıdır. “Corruption” ise “0.05” değerine #çok yakın olduğu için anlamlılığı bozabilir. Bu sebeple onu da modelden çıkarmalıyız. #Bu incelemeleri aynı zamanda “*” ifadeleri ile verilen yıldız dereceleri ile de anlayabiliriz.
+
+6-)“Residual Standard Error”,regresyon modelinin tahminlerinin gerçek değerlerden ne kadar sapma gösterdiğini gösteren bir ölçüdür. Bu değer ne kadar düşük olursa, modelin verilere ne kadar iyi uyduğunu gösterir. RSE değeri 558.4 birimdir. Bu değer, modelin tahminlerinin gerçek değerlerden ortalama olarak 558.4 birim kadar sapma gösterdiğini gösterir. Yani, modelin her bir tahmini gerçek değerlerden ortalama olarak bu miktarda sapma gösteriyor.
+
+7-)“Multiple R-squared”, Bağımsız değişkenlerin bağımlı değişken üzerindeki toplam varyansın ne kadarını açıkladığını gösterir. 1’e ne kadar yakınsa, model o kadar iyi bir şekilde verilere uyum sağlar. Burada 0.7307 değeri, bağımsız değişkenlerin toplam varyansın %73.07’sini açıkladığını gösterir.
+
+8-)“Adjusted R-squared”, R-squared değeri, regresyon modelinin uyumunu ve bağımsız değişkenlerin bağımlı değişken üzerindeki varyansın açıklanma yüzdesini gösterirken, modelin karmaşıklığını da dikkate alır. 0.7188 değeri, bağımsız değişkenlerin kullanımıyla modelin bağımlı değişken üzerindeki toplam varyansın yaklaşık olarak %71.88’ini açıkladığını ifade eder.Bu, modelin gözlenen varyansın büyük bir kısmını açıkladığı anlamına gelir ve genel olarak makul bir uyum sağladığına işaret eder.
+
+9-)“F-statistic”,modeldeki bağımsız değişkenlerin en az birinin bağımlı değişken üzerinde anlamlı bir etkisi olup olmadığını değerlendirir.”61.32” değeri F-istatistiğinin değeridir. “5 and 113 DF” ifadesi ise “5” ve “113” serbestlik derecesini temsil eder. Buradaki “5” regresyon modelindeki bağımsız değişken sayısını ve “113” toplam gözlem sayısından bağımsız değişken sayısının çıkarılmasını ifade eder.
+
+Şimdi “Generosity” ve “Corruption” değişkenleri olmadan modelimizi yeniden oluşturalım.
+
+```{r}
+model2 <- lm(Ladder ~ GDP + Social.Support + Freedom, data = trainset)
+model2
+summary(model2)
+```
+Konsol çıktısını incelediğimizde yeni Residuals değerlerimiz; 
+Min hata terimi: -2222.14, 
+Median: 78.06, 
+Max Hata terimi: 1059.23 
+olarak bulunduğunu görebiliriz. İlk modele göre Adjusted R-squared değerimizin yaklaşık %3’lük bir azalışa sahip olduğunnu görmekteyiz. O halde çıkarmış olduğumuz değişkenlerimiz model anlamlılığını etkilemektedir. Katsayıları yorumlayacak olursak “GDP” değişkeninin 1 birimlik değişimi Ladder üzerinde 4.432e-01 birimlik bir artışa neden olmaktadır. “Social.Support” değişkeninin ise 1 birimlik değişimi Ladder üzerinde 1.982e+03 birimlik bir artışa neden olmaktadır. “Freedom” değişkeni ise 1 birimlik değişimi Ladder üzerinde 2.533e+03 birimlik bir artışa neden olmaktadır.
+
+```{r}
+AIC(model,k=6) 
+#1878.926 
+AIC(model2,k=4) 
+#1865.427 
+BIC(model)
+#1870.38 
+BIC(model2) 
+#1869.322
+```
+AIC ve BIC ölçütlerine göre model2 daha küçük değerler verdiği için daha iyidir.
+
+
+Sabit varyansın olup olmadığı ile ilgili değerlendirmeyi yapabilmemiz için modelimize Breuch-Pagan testi uygulayabiliriz. Bu testi uygularken “lmtest” kütüphanesinden “bptest()” komutu kullanılmaktadır.
+
+```{r}
+bptest(model2)
+```
+data: model2
+BP = 2.5011, df = 3, p-value = 0.4751 
+H0 : VARYANS HOMOJEN YAPIDADIR.(DEĞİŞEN VARYANS YOKTUR.)) 
+H1 : VARYANS HETEROJEN YAPIDADIR.(DEĞİŞEN VARYANS VARDIR.))
+
+Sonuca bakarak model2’nin sabit varyansa sahip olduğunu söyleyebiliriz.
+
+Model değerlendirme metriklerini testverisi üzerinden inceleyelim. Bunun için model2 oluşturulurken çıkartılan “Generosity” ve “Corruption” değişkenlerini testset içerisinden de çıkartmam gerekmektedir.
+
+```{r}
+testset2 <- testset[-5,-6] 
+predictions <- predict(model2,testset2) 
+predictions 
+R2(predictions,testset2$Ladder) 
+#0.8211824 
+RMSE(predictions,testset2$Ladder) 
+#510.0999 
+MAE(predictions,testset2$Ladder) 
+#442.8626
+```
+Değerleri bulunmaktadır. Bu değerlere bakıldığında modelin performansının ve anlamlılığının oldukça iyi bir düzeyde olduğunu söyleyebiliriz.
+
+
+# Aykırı Değer Kontrolü
+Aykırı değer kontrollerimi Cook’s Distance yöntemi ile temizleyeceğim. Öncelikle distanceleri belirleyelim.
+```{r}
+distance <-cooks.distance(model2)
+```
+
+İki farklı ölçüt yöntemimiz bulunmaktadır: 
+1-) Herhangi bir distance bütün distancelerin ortalamasının 3 katından büyükse aykırı olabilir 
+2-) herhangi bir distance 4/tüm distance değerinden büyükse aykırı olabilir.
+
+```{r}
+olcut1 <- mean(distance)*3
+olcut1
+#0.0252269
+olcut2 <- 4/length(dist)
+olcut2
+#0.03361345
+```
+Her iki ölçütün ayrı ayrı işlem yapıp gözlemlerinin indexlerini elde edelim.
+
+```{r}
+olcut1index <- which(distance>olcut1)
+length(olcut1index)
+#11 aykırı değerin var olduğunu tespit etmiştir
+olcut2index <- which(distance>olcut2)
+length(olcut2index)
+#8 aykırı değerin var olduğunu tespit etmiştir.
+```
+Daha fazla aykırı değer içerdiği için olcu1’i ele alalım. ve cook distanceleri inceleyelim. Ölçüt değerini net görmek için bir line çizdirelim.
+```{r}
+plot(1:length(distance),distance,type="p",ylim=range(distance)*c(1,1))
+abline(h=olcut1,col="blue")
+```
+Mavi hattın üzerindekiler cook distance’ye göre aykırı değerler olarak ifade edilebilir. Şimdi Veri içerisindeki aykırı değerleri trainset içerisinden çıkartalım.
+```{r}
+trainsetremove <- trainset[-olcut1index,]
+nrow(trainset)
+#119
+nrow(trainsetremove)
+#108
+```
+Görüldüğü üzere 11 adet aykırı değeri trainsetten çıkartmış bulunmaktayız. Aykırılardan arınmış trainsetimiz ile yeni bir model oluşturalım.
+```{r}
+model3 <- lm(Ladder~ GDP + Social.Support + Freedom, data = trainsetremove)
+model3
+summary(model3)
+```
+Görüldüğü üzere aykırı değerlerden arındırıldığında modelin anlamlılığında yaklaşık %5’lik bir artış gerçekleşmiştir.Elde ettiğimiz modellerin sonuçları trainset üzerinden elde edildi ancak bu durumun testset üzerinden de gösterilmesi gerekir. Öncelikle AIC ve BIC kriterlerine göre iki modeli de ele alıp en iyi model üzerinden testset model değerlendirmesi yapacağız.
+
+```{r}
+AIC(model3, k=4)
+#1648.436
+AIC(model2, k=4)
+#1865.427
+BIC(model3)
+#1651.847
+BIC(model2)
+#1869.322
+```
+Değerleri incelediğimizde bariz şekilde model3’ün daha iyi olduğu gözlemlenmektedir. Buna göre model3’e testset üzerinden model değerlendirmesi yapalım.
+
+```{r}
+predictions2 <- predict(model3,testset2)
+R2(predictions2,testset2$Ladder)
+#0.831832
+RMSE(predictions2,testset2$Ladder)
+#516.806
+MAE(predictions2,testset2$Ladder)
+#456.6955
+```
+
+Bir de model2’nin model değerlendirmesini yapıp karşılaştıralım.
+```{r}
+predictions3 <- predict(model2,testset2)
+R2(predictions3,testset2$Ladder)
+#0.8211824
+RMSE(predictions3,testset2$Ladder)
+#510.0999
+MAE(predictions3,testset2$Ladder)
+#442.8626
+```
+Sonuçları inceleyecek olursak, model2 ile model3 arasında testset üzerinden belirgin bir fark görülmemektedir.
+
+# Çoklu Bağlantı Sorunu
+Bağımsız değişkenler birbirleri ile yüksek dereceliler ise çoklu bağlantı sorunu bulunmaktadır. Vif değerleri ile değerlendirilerek sorun giderilebilir. Eğer VIF>10 ise bağımsız değişkenlerim arasında yüksek dereceli ilişki vardır.Yüksek dereceli ilişkisi olan değişken modelden çkarılmalıdır. “car” kütüphanesinde bulunan vif() komutu ile incelemeyi yapabiliriz. Bu durumu inceleyecek olursak:
+
+```{r}
+vif(model3)
+```
+Şeklinde bir sonuç elde ederiz. Vif sonucuna göre bağımsız değişkenlerim arasında yüksek dereceli ilişki bulunmamaktadır.
+
+# İlişkili Hatalar
+Hatalar arasında ilişki yoksa hataların ε=0 doğrusu etrafında rastgele dağılması gerekir. Daha iyi inceleyebilmek için dağılım grafiğini inceleyelim.
+```{r}
+n <-length(residuals(model3))
+plot(tail(residuals(model3),n-1) ~ head(residuals(model3),n-1), xlab= expression(hat(epsilon)[i]),ylab= expression(hat(epsilon)[i+1]))
+abline(h=0,v=0,col=grey(0.75))
+```
+Grafikte de görüldüğü üzere otokolerasyon durumu olmadığı net şekilde gözükmektedir. istatistiksel olarak bir regresyon modeli kurup modelin anlamlılığını inceleyebiliriz.Beklentimiz bu modelin anlamlı olmamasıdır.
+```{r}
+summary(lm(tail(residuals(model3),n-1) ~ head(residuals(model3),n-1) -1))  
+```
+Konsol çıktısında da görüldüğü üzere kurmuş olduğmuz bu model anlamlı değildir. Yani iki tip residual arasında #doğrusal bir ilişki söz konusu değildir.
+
+Yapmış olduğumuz incelemeler doğrultusunda bağımlı değişkenimiz ile bağımsız değişkenlerimiz arasında oldukça güçlü bir ilişki bulunduğunu söyleyebiliriz. Bu durumda regresyon analizimizin sonucu olarak Mutluluk ; Para, sosyal destek ve özgürlük ile satın alınabilir. :)
+
+
